@@ -14,6 +14,8 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import onvif from 'node-onvif';
+import { spawn } from 'child_process';
 
 class AppUpdater {
   constructor() {
@@ -22,6 +24,60 @@ class AppUpdater {
     autoUpdater.checkForUpdatesAndNotify();
   }
 }
+
+// HELPER: Fixes the path issue (Dev vs Prod)
+const getBinaryPath = () => {
+  const isProd = app.isPackaged;
+  const binaryName = process.platform === 'win32' ? 'go2rtc.exe' : 'go2rtc';
+
+  if (isProd) {
+    // In production, files are packed inside the app
+    return path.join(process.resourcesPath, 'bin', binaryName);
+  } else {
+    // In dev, look at the project root
+    return path.join(process.cwd(), 'resources', 'bin', binaryName);
+  }
+};
+
+// --- UPDATED: Streaming Logic ---
+
+// Fallback URL for testing if no camera is found
+
+const TEST_RTSP_URL = 'rtsp://192.168.0.101:8080/h264_ulaw.sdp'; // <--- Put your link here
+
+ipcMain.handle('start-stream', async (event, rtspUrl) => {
+  // If React doesn't send a URL, use the Test Stream
+  const targetUrl = rtspUrl || TEST_RTSP_URL;
+  const binaryPath = getBinaryPath();
+
+  console.log('Attempting to start go2rtc at:', binaryPath);
+  console.log('Streaming Target:', targetUrl);
+
+  // We pass the configuration directly via the "-config" argument as a JSON string.
+  // This tells go2rtc: "Create a stream named 'camera1' from this RTSP URL"
+  const config = JSON.stringify({
+    streams: {
+      camera1: targetUrl,
+    },
+    log: {
+      level: 'info', // Useful for debugging
+    },
+  });
+
+  const subprocess = spawn(binaryPath, ['-config', config]);
+
+  subprocess.stdout.on('data', (data) => {
+    console.log(`go2rtc: ${data}`);
+  });
+
+  subprocess.stderr.on('data', (data) => {
+    console.error(`go2rtc error: ${data}`);
+  });
+
+  return 'Stream Engine Started';
+});
+
+// --------------------------------
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -58,7 +114,8 @@ const installExtensions = async () => {
 
 const createWindow = async () => {
   if (isDebug) {
-    await installExtensions();
+    // --- UPDATED: Commented out to prevent "sandboxed_renderer" crash ---
+    // await installExtensions();
   }
 
   const RESOURCES_PATH = app.isPackaged
