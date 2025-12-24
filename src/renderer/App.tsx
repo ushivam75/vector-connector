@@ -1,9 +1,10 @@
+/* eslint-disable react/button-has-type */
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import { useState } from 'react';
 
 // This component handles the Streaming UI
-const StreamDashboard = () => {
+function StreamDashboard() {
   const [status, setStatus] = useState('Idle');
   const [streamUrl, setStreamUrl] = useState('');
 
@@ -81,7 +82,7 @@ const StreamDashboard = () => {
       )}
     </div>
   );
-};
+}
 
 export default function App() {
   return (
