@@ -1,21 +1,13 @@
 /* eslint global-require: off, no-console: off, promise/always-return: off */
 
-/**
- * This module executes inside of electron's main process. You can start
- * electron renderer process from here and communicate with the other processes
- * through IPC.
- *
- * When running `npm run build` or `npm run build:main`, this file is compiled to
- * `./src/main.js` using webpack. This gives us some performance wins.
- */
 import path from 'path';
 import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
-import onvif from 'node-onvif';
 import { spawn } from 'child_process';
+import ngrok from 'ngrok';
 
 class AppUpdater {
   constructor() {
@@ -25,46 +17,44 @@ class AppUpdater {
   }
 }
 
-// HELPER: Fixes the path issue (Dev vs Prod)
-const getBinaryPath = () => {
+// --- HELPER: Finds the 'resources/bin' FOLDER ---
+const getBinFolder = () => {
   const isProd = app.isPackaged;
-  const binaryName = process.platform === 'win32' ? 'go2rtc.exe' : 'go2rtc';
-
   if (isProd) {
-    // In production, files are packed inside the app
-    return path.join(process.resourcesPath, 'bin', binaryName);
+    return path.join(process.resourcesPath, 'bin');
   } else {
-    // In dev, look at the project root
-    return path.join(process.cwd(), 'resources', 'bin', binaryName);
+    return path.join(process.cwd(), 'resources', 'bin');
   }
 };
 
-// --- UPDATED: Streaming Logic ---
+// --- STREAMING LOGIC ---
 
-// Fallback URL for testing if no camera is found
-
-const TEST_RTSP_URL = 'rtsp://192.168.0.101:8080/h264_ulaw.sdp'; // <--- Put your link here
+// Fallback URL for testing
+const TEST_RTSP_URL = 'rtsp://192.168.0.101:8080/h264_ulaw.sdp';
 
 ipcMain.handle('start-stream', async (event, rtspUrl) => {
-  // If React doesn't send a URL, use the Test Stream
+  // 1. Setup the Local Stream (go2rtc)
   const targetUrl = rtspUrl || TEST_RTSP_URL;
-  const binaryPath = getBinaryPath();
+  const binFolder = getBinFolder();
 
-  console.log('Attempting to start go2rtc at:', binaryPath);
-  console.log('Streaming Target:', targetUrl);
+  // Go2RTC needs the specific FILE path
+  const go2rtcBinary = path.join(
+    binFolder,
+    process.platform === 'win32' ? 'go2rtc.exe' : 'go2rtc',
+  );
 
-  // We pass the configuration directly via the "-config" argument as a JSON string.
-  // This tells go2rtc: "Create a stream named 'camera1' from this RTSP URL"
+  console.log('Attempting to start go2rtc at:', go2rtcBinary);
+
   const config = JSON.stringify({
     streams: {
       camera1: targetUrl,
     },
     log: {
-      level: 'info', // Useful for debugging
+      level: 'info',
     },
   });
 
-  const subprocess = spawn(binaryPath, ['-config', config]);
+  const subprocess = spawn(go2rtcBinary, ['-config', config]);
 
   subprocess.stdout.on('data', (data) => {
     console.log(`go2rtc: ${data}`);
@@ -74,7 +64,34 @@ ipcMain.handle('start-stream', async (event, rtspUrl) => {
     console.error(`go2rtc error: ${data}`);
   });
 
-  return 'Stream Engine Started';
+  // 2. Setup the Public Tunnel (ngrok)
+
+  // Wait 2 seconds for go2rtc to fully start
+  await new Promise((r) => setTimeout(r, 2000));
+
+  try {
+    await ngrok.disconnect();
+
+    // FIX: Ngrok wrapper needs the DIRECTORY, not the file
+    // It will automatically append "ngrok.exe" to this path
+    const ngrokDir = binFolder;
+
+    console.log('Using ngrok directory:', ngrokDir);
+
+    const publicUrl = await ngrok.connect({
+      addr: 1984,
+      authtoken: '37IlsL0oISNCJzOX7q6hNCRHq4m_7L8b5SYzdnDLy5wEbAgr',
+      binPath: () => ngrokDir, // <--- Sending the FOLDER path now
+    });
+
+    console.log('--- PUBLIC ACCESS URL ---');
+    console.log(publicUrl);
+
+    return { status: 'Stream Started', url: publicUrl };
+  } catch (err: any) {
+    console.error('Tunnel Error:', err);
+    return { status: 'Error', error: err.message || 'Unknown Tunnel Error' };
+  }
 });
 
 // --------------------------------
@@ -114,7 +131,6 @@ const installExtensions = async () => {
 
 const createWindow = async () => {
   if (isDebug) {
-    // --- UPDATED: Commented out to prevent "sandboxed_renderer" crash ---
     // await installExtensions();
   }
 
@@ -158,24 +174,15 @@ const createWindow = async () => {
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
 
-  // Open urls in the user's browser
   mainWindow.webContents.setWindowOpenHandler((edata) => {
     shell.openExternal(edata.url);
     return { action: 'deny' };
   });
 
-  // Remove this if your app does not use auto updates
-  // eslint-disable-next-line
   new AppUpdater();
 };
 
-/**
- * Add event listeners...
- */
-
 app.on('window-all-closed', () => {
-  // Respect the OSX convention of having the application in memory even
-  // after all windows have been closed
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -186,8 +193,6 @@ app
   .then(() => {
     createWindow();
     app.on('activate', () => {
-      // On macOS it's common to re-create a window in the app when the
-      // dock icon is clicked and there are no other windows open.
       if (mainWindow === null) createWindow();
     });
   })

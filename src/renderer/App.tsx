@@ -18,14 +18,16 @@ function StreamDashboard() {
         'start-stream',
         null,
       );
-      console.log(result);
+      // console.log(result);
 
       setStatus('Stream Active');
 
-      // 2. Set the URL for the player
-      // go2rtc always streams to localhost:1984 by default
-      // We use the "webrtc" page provided by go2rtc
-      setStreamUrl('http://127.0.0.1:1984/webrtc.html?src=camera1');
+      console.log('Full Result:', result);
+      // result.url is the PUBLIC ngrok link
+      // We add /webrtc.html?src=camera1 to the end of it
+      if (result.url) {
+        setStreamUrl(`${result.url}/webrtc.html?src=camera1`);
+      }
     } catch (error) {
       console.error(error);
       setStatus('Error Starting Stream');
