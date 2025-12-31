@@ -68,10 +68,10 @@ function StreamDashboard() {
       </p>
 
       {/* The Video Player Area */}
-      {streamUrl && (
+      {/* {streamUrl && (
         <div style={{ marginTop: '30px', border: '2px solid #007bff' }}>
           <h3>Live Feed</h3>
-          {/* We embed the go2rtc WebRTC player inside an iframe */}
+          {/* We embed the go2rtc WebRTC player inside an iframe 
           <iframe
             src={streamUrl}
             title="Live Stream"
@@ -81,7 +81,7 @@ function StreamDashboard() {
             allow="autoplay; fullscreen"
           />
         </div>
-      )}
+      )} */}
     </div>
   );
 }

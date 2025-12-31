@@ -6,8 +6,12 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
-import { spawn } from 'child_process';
+import { spawn, exec, ChildProcess } from 'child_process';
 import ngrok from 'ngrok';
+import { updateCameraUrl } from './firebase'; // Import your Firebase helper
+
+// Global tracker
+let go2rtcProcess: ChildProcess | null = null;
 
 class AppUpdater {
   constructor() {
@@ -17,75 +21,83 @@ class AppUpdater {
   }
 }
 
-// --- HELPER: Finds the 'resources/bin' FOLDER ---
 const getBinFolder = () => {
-  const isProd = app.isPackaged;
-  if (isProd) {
-    return path.join(process.resourcesPath, 'bin');
-  } else {
-    return path.join(process.cwd(), 'resources', 'bin');
-  }
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'bin')
+    : path.join(process.cwd(), 'resources', 'bin');
+};
+
+// --- ROBUST CLEANUP FUNCTION ---
+const forceKillAll = () => {
+  return new Promise((resolve) => {
+    console.log('🧹 Cleaning up old processes...');
+
+    // Kill internal reference
+    if (go2rtcProcess) {
+      go2rtcProcess.kill();
+      go2rtcProcess = null;
+    }
+
+    // Force kill Windows processes (Nuclear Option)
+    if (process.platform === 'win32') {
+      exec('taskkill /F /IM ngrok.exe /IM go2rtc.exe', () => {
+        // We ignore errors here because if the process isn't found, that's good!
+        resolve(true);
+      });
+    } else {
+      exec('pkill ngrok; pkill go2rtc', () => resolve(true));
+    }
+  });
 };
 
 // --- STREAMING LOGIC ---
-
-// Fallback URL for testing
-const TEST_RTSP_URL = 'rtsp://192.168.0.101:8080/h264_ulaw.sdp';
+const TEST_RTSP_URL = 'rtsp://192.168.0.103:8080/h264_ulaw.sdp';
 
 ipcMain.handle('start-stream', async (event, rtspUrl) => {
-  // 1. Setup the Local Stream (go2rtc)
+  // STEP 1: NUKE EVERYTHING FIRST (The Fix)
+  await forceKillAll();
+
+  // Wait 1 second to let Windows release the files/ports
+  await new Promise((r) => setTimeout(r, 1000));
+
+  // STEP 2: Start go2rtc
   const targetUrl = rtspUrl || TEST_RTSP_URL;
   const binFolder = getBinFolder();
-
-  // Go2RTC needs the specific FILE path
   const go2rtcBinary = path.join(
     binFolder,
     process.platform === 'win32' ? 'go2rtc.exe' : 'go2rtc',
   );
 
-  console.log('Attempting to start go2rtc at:', go2rtcBinary);
-
+  console.log('🚀 Starting go2rtc...');
   const config = JSON.stringify({
-    streams: {
-      camera1: targetUrl,
-    },
-    log: {
-      level: 'info',
-    },
+    streams: { camera1: targetUrl },
+    log: { level: 'info' },
   });
 
-  const subprocess = spawn(go2rtcBinary, ['-config', config]);
+  go2rtcProcess = spawn(go2rtcBinary, ['-config', config]);
 
-  subprocess.stdout.on('data', (data) => {
-    console.log(`go2rtc: ${data}`);
-  });
-
-  subprocess.stderr.on('data', (data) => {
-    console.error(`go2rtc error: ${data}`);
-  });
-
-  // 2. Setup the Public Tunnel (ngrok)
-
-  // Wait 2 seconds for go2rtc to fully start
+  // STEP 3: Start Ngrok
+  // Wait 2 seconds for go2rtc to be ready
   await new Promise((r) => setTimeout(r, 2000));
 
   try {
+    // Ensure ngrok library is disconnected internally
     await ngrok.disconnect();
 
-    // FIX: Ngrok wrapper needs the DIRECTORY, not the file
-    // It will automatically append "ngrok.exe" to this path
     const ngrokDir = binFolder;
-
-    console.log('Using ngrok directory:', ngrokDir);
+    console.log('🚀 Starting Ngrok...');
 
     const publicUrl = await ngrok.connect({
       addr: 1984,
       authtoken: '37IlsL0oISNCJzOX7q6hNCRHq4m_7L8b5SYzdnDLy5wEbAgr',
-      binPath: () => ngrokDir, // <--- Sending the FOLDER path now
+      binPath: () => ngrokDir,
     });
 
-    console.log('--- PUBLIC ACCESS URL ---');
+    console.log('--- SUCCESS: PUBLIC URL ---');
     console.log(publicUrl);
+
+    // Save to Firebase
+    updateCameraUrl('home_1', publicUrl);
 
     return { status: 'Stream Started', url: publicUrl };
   } catch (err: any) {
@@ -93,8 +105,6 @@ ipcMain.handle('start-stream', async (event, rtspUrl) => {
     return { status: 'Error', error: err.message || 'Unknown Tunnel Error' };
   }
 });
-
-// --------------------------------
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -183,9 +193,15 @@ const createWindow = async () => {
 };
 
 app.on('window-all-closed', () => {
+  // Also try to clean up on close
+  forceKillAll();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  forceKillAll();
 });
 
 app
