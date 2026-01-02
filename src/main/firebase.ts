@@ -34,3 +34,17 @@ export const updateCameraUrl = (cameraId: string, publicUrl: string) => {
     `🔥 Firebase Updated: Camera ${cameraId} is live at ${publicUrl}`,
   );
 };
+
+// NEW: Heartbeat Function
+export const startHeartbeat = (cameraId: string) => {
+  const lastSeenRef = ref(db, `cameras/${cameraId}/lastSeen`);
+
+  // Update the timestamp every 5 seconds
+  const interval = setInterval(() => {
+    set(lastSeenRef, Date.now());
+    // console.log('💓 Heartbeat sent');
+  }, 5000);
+
+  // Return the interval ID so we could stop it if needed
+  return interval;
+};

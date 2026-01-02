@@ -8,7 +8,7 @@ import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { spawn, exec, ChildProcess } from 'child_process';
 import ngrok from 'ngrok';
-import { updateCameraUrl } from './firebase'; // Import your Firebase helper
+import { updateCameraUrl, startHeartbeat } from './firebase'; // Import your Firebase helper
 
 // Global tracker
 let go2rtcProcess: ChildProcess | null = null;
@@ -51,45 +51,49 @@ const forceKillAll = () => {
 };
 
 // --- STREAMING LOGIC ---
-const TEST_RTSP_URL = 'rtsp://192.168.0.103:8080/h264_ulaw.sdp';
+// const TEST_RTSP_URL = 'rtsp://192.168.0.103:8080/h264_ulaw.sdp';
+
+// Remove the 'const TEST_RTSP_URL = ...' line if it exists at the top
 
 ipcMain.handle('start-stream', async (event, rtspUrl) => {
-  // STEP 1: NUKE EVERYTHING FIRST (The Fix)
+  // STEP 1: NUKE EVERYTHING FIRST
   await forceKillAll();
-
-  // Wait 1 second to let Windows release the files/ports
   await new Promise((r) => setTimeout(r, 1000));
 
   // STEP 2: Start go2rtc
-  const targetUrl = rtspUrl || TEST_RTSP_URL;
+  // HERE IS THE CHANGE: We use the rtspUrl passed from the UI
+  // If for some reason it's empty, we throw an error
+  if (!rtspUrl) {
+    return { status: 'Error', error: 'No RTSP URL provided' };
+  }
+
   const binFolder = getBinFolder();
   const go2rtcBinary = path.join(
     binFolder,
     process.platform === 'win32' ? 'go2rtc.exe' : 'go2rtc',
   );
 
-  console.log('🚀 Starting go2rtc...');
+  console.log(`🚀 Starting go2rtc with source: ${rtspUrl}`);
+
+  // Use the dynamic URL in the config
   const config = JSON.stringify({
-    streams: { camera1: targetUrl },
+    streams: { camera1: rtspUrl },
     log: { level: 'info' },
   });
 
   go2rtcProcess = spawn(go2rtcBinary, ['-config', config]);
 
-  // STEP 3: Start Ngrok
-  // Wait 2 seconds for go2rtc to be ready
+  // STEP 3: Start Ngrok (The rest remains exactly the same...)
   await new Promise((r) => setTimeout(r, 2000));
 
   try {
-    // Ensure ngrok library is disconnected internally
     await ngrok.disconnect();
-
     const ngrokDir = binFolder;
     console.log('🚀 Starting Ngrok...');
 
     const publicUrl = await ngrok.connect({
       addr: 1984,
-      authtoken: '37IlsL0oISNCJzOX7q6hNCRHq4m_7L8b5SYzdnDLy5wEbAgr',
+      authtoken: '37IlsL0oISNCJzOX7q6hNCRHq4m_7L8b5SYzdnDLy5wEbAgr', // Your Token
       binPath: () => ngrokDir,
     });
 
@@ -98,6 +102,7 @@ ipcMain.handle('start-stream', async (event, rtspUrl) => {
 
     // Save to Firebase
     updateCameraUrl('home_1', publicUrl);
+    startHeartbeat('home_1');
 
     return { status: 'Stream Started', url: publicUrl };
   } catch (err: any) {
