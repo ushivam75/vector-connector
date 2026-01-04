@@ -56,34 +56,57 @@ const forceKillAll = () => {
 // Remove the 'const TEST_RTSP_URL = ...' line if it exists at the top
 
 ipcMain.handle('start-stream', async (event, rtspUrl) => {
-  // STEP 1: NUKE EVERYTHING FIRST
-  await forceKillAll();
-  await new Promise((r) => setTimeout(r, 1000));
-
-  // STEP 2: Start go2rtc
-  // HERE IS THE CHANGE: We use the rtspUrl passed from the UI
-  // If for some reason it's empty, we throw an error
+  // 1. Validation
   if (!rtspUrl) {
     return { status: 'Error', error: 'No RTSP URL provided' };
   }
 
+  // 2. Cleanup Old Sessions
+  await forceKillAll();
+  await new Promise((r) => setTimeout(r, 1000));
+
   const binFolder = getBinFolder();
+
+  // --- START FFMPEG UPDATE ---
+
+  // 3. Prepare Environment
+  // We add the bin folder to the System PATH so go2rtc can find 'ffmpeg.exe'
+  const pathEnv = process.env.PATH || '';
+  const newPath =
+    process.platform === 'win32'
+      ? `${binFolder};${pathEnv}`
+      : `${binFolder}:${pathEnv}`;
+
+  // Create a custom environment object for the child process
+  const env = { ...process.env, PATH: newPath };
+
   const go2rtcBinary = path.join(
     binFolder,
     process.platform === 'win32' ? 'go2rtc.exe' : 'go2rtc',
   );
 
-  console.log(`🚀 Starting go2rtc with source: ${rtspUrl}`);
+  console.log(`🚀 Starting go2rtc (B&W Low Bandwidth) with source: ${rtspUrl}`);
 
-  // Use the dynamic URL in the config
+  // 4. Configure Stream with FFmpeg
+  // ffmpeg:{url}    -> Use FFmpeg engine
+  // -vf hue=s=0     -> Saturation 0 (Black & White)
+  // -s 640x480      -> Resize to 480p (Small size)
+  // -r 15           -> Limit to 15 FPS
+  // -b:v 150k       -> Limit bitrate to 150kbps
+  const lowBandwidthStream = `ffmpeg:${rtspUrl}#video=h264#raw=-vf hue=s=0 -s 640x480 -r 15 -b:v 150k -preset ultrafast -tune zerolatency`;
+
   const config = JSON.stringify({
-    streams: { camera1: rtspUrl },
+    streams: { camera1: lowBandwidthStream },
     log: { level: 'info' },
   });
 
-  go2rtcProcess = spawn(go2rtcBinary, ['-config', config]);
+  // 5. Spawn Process with Custom ENV
+  // We pass { env } so it knows where to find ffmpeg.exe
+  go2rtcProcess = spawn(go2rtcBinary, ['-config', config], { env });
 
-  // STEP 3: Start Ngrok (The rest remains exactly the same...)
+  // --- END FFMPEG UPDATE ---
+
+  // 6. Start Ngrok (Your existing logic)
   await new Promise((r) => setTimeout(r, 2000));
 
   try {
@@ -93,14 +116,13 @@ ipcMain.handle('start-stream', async (event, rtspUrl) => {
 
     const publicUrl = await ngrok.connect({
       addr: 1984,
-      authtoken: '37IlsL0oISNCJzOX7q6hNCRHq4m_7L8b5SYzdnDLy5wEbAgr', // Your Token
+      authtoken: '37IlsL0oISNCJzOX7q6hNCRHq4m_7L8b5SYzdnDLy5wEbAgr',
       binPath: () => ngrokDir,
     });
 
-    console.log('--- SUCCESS: PUBLIC URL ---');
+    console.log('--- SUCCESS: PUBLIC URL (B&W) ---');
     console.log(publicUrl);
 
-    // Save to Firebase
     updateCameraUrl('home_1', publicUrl);
     startHeartbeat('home_1');
 
